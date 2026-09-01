@@ -112,6 +112,28 @@ func (m *Manager) StopAll() {
 	}
 }
 
+// RestartAll stops and restarts every currently running poller — used
+// after a full database clear (see store.ClearAllHistory), since each
+// poller's in-memory open-session map would otherwise keep referencing
+// session IDs the database no longer has, silently no-op-ing their
+// updates until they naturally close and reopen. Restarting rebuilds each
+// poller from scratch, which correctly finds zero open sessions in the
+// now-empty database.
+func (m *Manager) RestartAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fws := make([]config.Firewall, 0, len(m.running))
+	for _, r := range m.running {
+		fws = append(fws, r.fw)
+	}
+	for _, fw := range fws {
+		m.stopLocked(fw.ID)
+	}
+	for _, fw := range fws {
+		m.startLocked(fw)
+	}
+}
+
 // RunningIDs returns the firewall IDs currently being polled.
 func (m *Manager) RunningIDs() []string {
 	m.mu.Lock()

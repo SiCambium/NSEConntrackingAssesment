@@ -25,6 +25,7 @@
     <button class="tab-btn" data-tab="approved">Approved</button>
     <button class="tab-btn" data-tab="rules">Rule Preview</button>
     <button class="tab-btn" data-tab="settings">Settings</button>
+    <button class="tab-btn" data-tab="about">About</button>
   </nav>
 
   <main>
@@ -40,14 +41,36 @@
         <input name="tcp_state" placeholder="TCP state">
         <input name="host_name" placeholder="Host name contains">
         <label class="checkbox"><input type="checkbox" name="open_only"> Open only</label>
+        <label class="checkbox"><input type="checkbox" id="group-by-dst"> Group by src IP → dst IP:port (hide src port)</label>
         <button type="submit">Search</button>
       </form>
+      <div class="legend">
+        <span><i class="swatch cat-dns"></i>DNS</span>
+        <span><i class="swatch cat-web"></i>Web (HTTP/HTTPS)</span>
+        <span><i class="swatch cat-mail"></i>Mail</span>
+        <span><i class="swatch cat-admin"></i>Remote admin</span>
+        <span><i class="swatch cat-vpn"></i>VPN</span>
+        <span><i class="swatch cat-realtime"></i>Realtime/VoIP</span>
+      </div>
       <div class="table-wrap">
         <table id="flows-table">
           <thead>
             <tr>
-              <th>Risk</th><th>Protocol</th><th>Src</th><th>Dst</th><th>Direction</th>
-              <th>Application</th><th>State</th><th>Host</th><th>Bytes</th><th>First seen</th><th>Last seen</th><th></th>
+              <th data-sort="risk" data-type="num">Risk</th>
+              <th data-sort="protocol">Protocol</th>
+              <th data-sort="src">Src</th>
+              <th data-sort="dst">Dst</th>
+              <th data-sort="service">Service</th>
+              <th data-sort="count" data-type="num">Count</th>
+              <th data-sort="direction">Direction</th>
+              <th data-sort="application">Application</th>
+              <th data-sort="state">State</th>
+              <th data-sort="host">Host</th>
+              <th data-sort="bytes" data-type="num">Bytes</th>
+              <th data-sort="first_seen">First seen</th>
+              <th data-sort="last_seen">Last seen</th>
+              <th data-sort="approved">Approved</th>
+              <th></th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -61,8 +84,15 @@
         <table id="ports-table">
           <thead>
             <tr>
-              <th>Risk</th><th>Protocol</th><th>Port</th><th>Application</th><th>Samples</th>
-              <th>Distinct dst IPs</th><th>Total bytes</th><th>First seen</th><th>Last seen</th>
+              <th data-sort="risk" data-type="num">Risk</th>
+              <th data-sort="protocol">Protocol</th>
+              <th data-sort="port" data-type="num">Port</th>
+              <th data-sort="application">Application</th>
+              <th data-sort="samples" data-type="num">Samples</th>
+              <th data-sort="distinct_ips" data-type="num">Distinct dst IPs</th>
+              <th data-sort="bytes" data-type="num">Total bytes</th>
+              <th data-sort="first_seen">First seen</th>
+              <th data-sort="last_seen">Last seen</th>
               <th>Reasons</th><th></th>
             </tr>
           </thead>
@@ -101,6 +131,7 @@
     <section id="tab-settings" class="tab-panel">
       <p class="hint">Firewalls to monitor. Adding one here starts polling it immediately — no restart needed. Removing one stops polling it but keeps its history.</p>
       <div id="settings-unavailable" class="caveat" hidden>Settings aren't editable in this mode (no writable config was configured for this server).</div>
+
       <div class="table-wrap">
         <table id="settings-table">
           <thead><tr><th>Status</th><th>Name</th><th>Host</th><th>Port</th><th>User</th><th>Poll interval</th><th></th></tr></thead>
@@ -123,8 +154,55 @@
         </div>
         <p id="settings-form-error" class="form-error"></p>
       </form>
+
+      <h3>Data sources</h3>
+      <p class="hint">Optional "what do we know about this IP" lookups (WHOIS-style identity, not risk scoring). Each is free and needs no account — off by default, since enabling one means a destination IP gets sent to that service when you click it in the Flows tab. Turn on whichever you're comfortable with; enabled sources are queried together and shown as one combined result.</p>
+      <div class="table-wrap">
+        <table id="sources-table">
+          <thead><tr><th>Enabled</th><th>Source</th><th>Status</th><th>Last checked</th><th>Detail</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h3>Database</h3>
+      <p class="hint">All history lives in one local SQLite database — nothing here is sent anywhere. Clearing it wipes connection history, port stats, approved ports, and cached lookups, but keeps your configured firewalls (they'll start repopulating on the next poll).</p>
+      <p id="database-size" class="hint"></p>
+      <button id="database-clear" class="secondary">Clear database…</button>
+    </section>
+
+    <section id="tab-about" class="tab-panel about">
+      <p id="about-version" class="hint"></p>
+      <h2>What this is</h2>
+      <p>ConnTrack polls one or more Cambium NSE3000/4000 firewalls over SSH for their connection-tracking table (<code>show conntrack</code>), stores the history in a local database, and scores connections and ports for risk — so you can see what's actually talking to what, decide what to leave open, and get a reviewable firewall rule list for everything else. It's a standalone companion to <a href="https://github.com/SiCambium/NSELocalSSH" target="_blank" rel="noopener">NSELocalSSH</a>, reusing its SSH session pattern and connection-tracking data model.</p>
+
+      <h2>Where the data comes from</h2>
+      <ul>
+        <li><strong>Connections &amp; the "Application" tag</strong> — read directly from your firewall's own DPI classification over SSH. Nothing here is guessed.</li>
+        <li><strong>Risk score</strong> — a local, offline heuristic (legacy admin ports, cleartext protocols, unrecognized traffic on an odd port, high-volume first contact, low sample confidence) combined with a cached <a href="https://www.greynoise.io/" target="_blank" rel="noopener">GreyNoise Community</a> reputation lookup for public destination IPs — free, no account needed, capped at 10 lookups/day, which this app respects by caching aggressively and spreading lookups across the day.</li>
+        <li><strong>"What do we know about this IP" lookups</strong> — five free, keyless sources (ipwho.is, RDAP, reverse DNS, Team Cymru ASN, Shodan InternetDB), each individually toggleable in Settings and <strong>off by default</strong>. Enabled sources are queried together with one click on a destination IP. These are the only things in the app that send anything to a third party outside the GreyNoise reputation check.</li>
+      </ul>
+
+      <h2>The rule preview is deny-only, manual-review</h2>
+      <p>NSELocalSSH's own firewall code marks the device's outbound-filter <code>allow</code> action as <em>unconfirmed</em> over CLI — only <code>deny</code> has proven working syntax. So the Rule Preview tab never generates an allow rule or a catch-all "deny everything else" — only named deny rules for specific ports/applications you haven't approved. Nothing is ever pushed to a device from here; review each row and transcribe it into NSELocalSSH's own Firewall screen yourself.</p>
+
+      <h2>Multiple firewalls, never merged</h2>
+      <p>Every table is scoped by firewall. Switching the picker at the top never blends one firewall's history, risk scores, or approved-ports list into another's.</p>
+
+      <h2>About the "Demo Firewall"</h2>
+      <p>If you ever see a firewall called <strong>"Demo Firewall"</strong> with obviously synthetic traffic (e.g. telnet to <code>203.0.113.66</code>), that's seeded by a separate developer tool (<code>cmd/replay</code>) used to test this dashboard without a live device — it is <strong>not</strong> part of the real app. A fresh install of <code>conntrackd</code> or <code>ConnTrack.app</code> always starts with zero firewalls configured until you add one from the Settings tab.</p>
+
+      <h2>Source</h2>
+      <p><a href="https://github.com/SiCambium/NSEConntrackingAssesment" target="_blank" rel="noopener">github.com/SiCambium/NSEConntrackingAssesment</a></p>
     </section>
   </main>
+
+  <dialog id="detail-modal">
+    <div class="detail-modal-header">
+      <h3 id="detail-title"></h3>
+      <button id="detail-close" class="secondary">Close</button>
+    </div>
+    <div id="detail-body"></div>
+  </dialog>
 
   <script src="/app.js"></script>
 </body>

@@ -123,3 +123,81 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 .status-dot.on { background: var(--low); }
 .status-dot.off { background: var(--muted); }
+.status-dot.warn { background: var(--medium); }
+.status-dot.error { background: var(--critical); }
+
+.lookup-results { display: block; margin-top: 4px; }
+.lookup-results .lookup-line { display: block; color: var(--muted); font-size: 11px; }
+.lookup-results .lookup-line strong { color: var(--text); font-weight: 600; }
+
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--text); }
+th[data-sort] .sort-arrow { opacity: 0.5; margin-left: 4px; font-size: 10px; }
+th[data-sort].sorted .sort-arrow { opacity: 1; color: var(--accent); }
+
+.ip-link { color: var(--text); text-decoration: underline dotted; cursor: pointer; background: none; border: none; padding: 0; font: inherit; }
+.ip-link:hover { color: var(--accent); }
+.ip-org-result { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+.badge.approved { background: var(--low); color: #0d1117; }
+.badge.not-approved { background: var(--border); color: var(--muted); }
+
+.about { max-width: 80ch; line-height: 1.6; }
+.about h2 { font-size: 16px; margin: 24px 0 8px; }
+.about h2:first-child { margin-top: 0; }
+.about p, .about li { color: var(--muted); font-size: 14px; }
+.about ul { padding-left: 20px; }
+.about code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; color: var(--text); }
+.about a { color: var(--accent); }
+
+/* Destination-port category coloring — a left-border strip, deliberately
+   a different visual channel from the risk badge (fill color) so the two
+   signals never compete for the same color. */
+:root {
+  --cat-dns: #a78bfa;
+  --cat-web: #4f8cff;
+  --cat-mail: #f0b429;
+  --cat-admin: #ec4899;
+  --cat-vpn: #34d399;
+  --cat-realtime: #22d3ee;
+}
+#flows-table tbody tr { border-left: 3px solid transparent; }
+#flows-table tbody tr.cat-dns { border-left-color: var(--cat-dns); }
+#flows-table tbody tr.cat-web { border-left-color: var(--cat-web); }
+#flows-table tbody tr.cat-mail { border-left-color: var(--cat-mail); }
+#flows-table tbody tr.cat-admin { border-left-color: var(--cat-admin); }
+#flows-table tbody tr.cat-vpn { border-left-color: var(--cat-vpn); }
+#flows-table tbody tr.cat-realtime { border-left-color: var(--cat-realtime); }
+
+.reasons-list { margin: 0; padding-left: 16px; }
+.reasons-list li { color: var(--muted); font-size: 12px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+.legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.legend .cat-dns { background: var(--cat-dns); }
+.legend .cat-web { background: var(--cat-web); }
+.legend .cat-mail { background: var(--cat-mail); }
+.legend .cat-admin { background: var(--cat-admin); }
+.legend .cat-vpn { background: var(--cat-vpn); }
+.legend .cat-realtime { background: var(--cat-realtime); }
+
+.risk-badge-btn { background: none; border: none; padding: 0; cursor: pointer; }
+.risk-badge-btn .badge { cursor: pointer; }
+.risk-badge-btn .badge:hover { filter: brightness(1.15); }
+
+#detail-modal {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+  padding: 20px; width: min(640px, 90vw); max-height: 85vh; overflow-y: auto;
+}
+#detail-modal::backdrop { background: rgba(0,0,0,0.6); }
+.detail-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.detail-modal-header h3 { margin: 0; font-size: 15px; font-family: ui-monospace, monospace; }
+.detail-dl { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; margin: 0 0 16px; }
+.detail-dl dt { color: var(--muted); font-size: 12px; }
+.detail-dl dd { margin: 0; font-size: 13px; }
+#detail-body h4 { font-size: 13px; margin: 16px 0 6px; color: var(--text); }
+#detail-body .reasons-list li { font-size: 13px; }
+.connections-list { list-style: none; margin: 0; padding: 0; }
+.connections-list li { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.connections-list li:last-child { border-bottom: none; }
+.connections-list .hint { display: block; font-size: 11px; margin-top: 2px; }

@@ -4,15 +4,145 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 
 	"conntrackd/internal/config"
+	"conntrackd/internal/enrich"
+	"conntrackd/internal/version"
 )
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
+		"version":                version.Version,
 		"poll_intervals_seconds": config.AllowedPollIntervalsSeconds,
 	})
+}
+
+// sourceInfo is one enrich.Source as the Settings UI sees it: its
+// registered health status plus whether it's currently enabled — enabled
+// is a config concern (per-firewall-independent, global to the app),
+// status is the registry's own concern (does it actually work).
+type sourceInfo struct {
+	enrich.Status
+	Enabled bool `json:"enabled"`
+}
+
+func (s *Server) sourcesSnapshot() []sourceInfo {
+	cfg := config.Config{}
+	if s.configStore != nil {
+		cfg = s.configStore.Get()
+	}
+	statuses := s.enrichment.Status()
+	out := make([]sourceInfo, 0, len(statuses))
+	for _, st := range statuses {
+		out = append(out, sourceInfo{Status: st, Enabled: cfg.SourceEnabled(st.Key)})
+	}
+	return out
+}
+
+func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"writable": s.configStore != nil,
+		"sources":  s.sourcesSnapshot(),
+	})
+}
+
+func (s *Server) handleSetSourceEnabled(w http.ResponseWriter, r *http.Request) {
+	if s.configStore == nil {
+		writeError(w, http.StatusNotImplemented, "settings are not writable in this mode")
+		return
+	}
+	key := r.PathValue("key")
+	if !slices.Contains(s.enrichment.Keys(), key) {
+		writeError(w, http.StatusNotFound, "unknown source: "+key)
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if _, err := s.configStore.Update(func(cfg *config.Config) error {
+		if cfg.EnabledSources == nil {
+			cfg.EnabledSources = map[string]bool{}
+		}
+		cfg.EnabledSources[key] = req.Enabled
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Turning a source on runs one test lookup immediately (against a
+	// stable, well-known public IP) so its Settings row shows real health
+	// right away instead of sitting at "not checked yet" until you
+	// happen to click a destination IP in the Flows tab later.
+	if req.Enabled {
+		s.enrichment.Lookup(r.Context(), key, testLookupIP)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"writable": true, "sources": s.sourcesSnapshot()})
+}
+
+// testLookupIP is Cloudflare's public resolver — stable, well-known,
+// always resolvable — used only to health-check a newly-enabled source.
+const testLookupIP = "1.1.1.1"
+
+// handleLookup runs every currently-enabled enrich source against one IP
+// and returns all their results together (plus any per-source errors),
+// so the UI can show a combined "who/what is this" answer from one click
+// instead of one request per source. Sources that are off are skipped
+// entirely — never queried, never counted against their own status.
+func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
+	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+	if ip == "" {
+		writeError(w, http.StatusBadRequest, "ip is required")
+		return
+	}
+	cfg := config.Config{}
+	if s.configStore != nil {
+		cfg = s.configStore.Get()
+	}
+
+	type lookupResult struct {
+		Source string `json:"source"`
+		Name   string `json:"name"`
+		enrich.Result
+		Error string `json:"error,omitempty"`
+	}
+
+	var (
+		mu      sync.Mutex
+		results []lookupResult
+		wg      sync.WaitGroup
+	)
+	for _, key := range s.enrichment.Keys() {
+		if !cfg.SourceEnabled(key) {
+			continue
+		}
+		key := key
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := s.enrichment.Lookup(r.Context(), key, ip)
+			lr := lookupResult{Source: key, Result: res}
+			if err != nil {
+				lr.Error = err.Error()
+			}
+			mu.Lock()
+			results = append(results, lr)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	if len(results) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ip": ip, "results": []lookupResult{}, "note": "no lookup sources are enabled — turn some on in Settings"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ip": ip, "results": results})
 }
 
 // settingsFirewall is what the Settings UI sees: never includes the
@@ -229,3 +359,35 @@ const (
 	errFirewallExists   = settingsError("a firewall with that id already exists")
 	errFirewallNotFound = settingsError("no firewall with that id")
 )
+
+func (s *Server) handleDatabaseInfo(w http.ResponseWriter, r *http.Request) {
+	size, err := s.store.SizeBytes()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"size_bytes": size, "path": s.store.Path})
+}
+
+// handleClearDatabase wipes all connection history, port-usage rollups,
+// approved-ports decisions, and threat-intel cache/queue state — but not
+// the configured firewall list itself (that lives in config.yaml, not the
+// database, and this endpoint never touches it). If pollers are running,
+// every one of them is restarted afterward so its in-memory open-session
+// tracking doesn't keep pointing at rows that no longer exist — see
+// poller.Manager.RestartAll.
+func (s *Server) handleClearDatabase(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.ClearAllHistory(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if s.pollers != nil {
+		s.pollers.RestartAll()
+	}
+	size, err := s.store.SizeBytes()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "size_bytes": size})
+}

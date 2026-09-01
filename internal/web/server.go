@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"conntrackd/internal/config"
+	"conntrackd/internal/enrich"
 	"conntrackd/internal/poller"
 	"conntrackd/internal/store"
 	"conntrackd/internal/threatintel"
@@ -24,17 +25,26 @@ type Server struct {
 	reputation  *threatintel.Manager
 	configStore *config.Store
 	pollers     *poller.Manager
+	enrichment  *enrich.Registry
 	mux         *http.ServeMux
 }
 
 // New builds the dashboard's HTTP handler. configStore and pollers are
 // optional (nil is fine) — when absent, the Settings tab's read endpoint
 // still works against whatever configStore.Get() would have returned, but
-// write endpoints (add/edit/remove a firewall) return 501, since there's
-// nothing to persist to or reload. cmd/conntrackd and cmd/conntrack-app
-// both pass real ones; a future read-only/embedded use could omit them.
+// write endpoints (add/edit/remove a firewall, toggle a lookup source)
+// return 501, since there's nothing to persist to or reload. cmd/conntrackd
+// and cmd/conntrack-app both pass real ones; a future read-only/embedded
+// use could omit them.
 func New(st *store.Store, reputation *threatintel.Manager, configStore *config.Store, pollers *poller.Manager) *Server {
-	s := &Server{store: st, reputation: reputation, configStore: configStore, pollers: pollers, mux: http.NewServeMux()}
+	s := &Server{
+		store: st, reputation: reputation, configStore: configStore, pollers: pollers,
+		enrichment: enrich.NewRegistry(
+			enrich.NewIPWhoIs(), enrich.NewRDAP(), enrich.NewReverseDNS(),
+			enrich.NewTeamCymru(), enrich.NewShodanInternetDB(),
+		),
+		mux: http.NewServeMux(),
+	}
 	s.routes()
 	return s
 }
@@ -60,11 +70,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/firewalls/{id}/flows", s.handleFlows)
 	s.mux.HandleFunc("GET /api/firewalls/{id}/flows/{sessionId}/samples", s.handleSessionSamples)
 	s.mux.HandleFunc("GET /api/firewalls/{id}/ports", s.handlePorts)
+	s.mux.HandleFunc("GET /api/firewalls/{id}/ports/connections", s.handlePortConnections)
 	s.mux.HandleFunc("POST /api/firewalls/{id}/ports/approve", s.handleApprovePort)
 	s.mux.HandleFunc("POST /api/firewalls/{id}/ports/unapprove", s.handleUnapprovePort)
 	s.mux.HandleFunc("GET /api/firewalls/{id}/approved", s.handleListApproved)
 	s.mux.HandleFunc("GET /api/firewalls/{id}/rules/preview", s.handleRulesPreview)
 	s.mux.HandleFunc("GET /api/firewalls/{id}/reputation/status", s.handleReputationStatus)
+	s.mux.HandleFunc("GET /api/settings/sources", s.handleListSources)
+	s.mux.HandleFunc("POST /api/settings/sources/{key}", s.handleSetSourceEnabled)
+	s.mux.HandleFunc("GET /api/lookup", s.handleLookup)
+	s.mux.HandleFunc("GET /api/settings/database", s.handleDatabaseInfo)
+	s.mux.HandleFunc("POST /api/settings/database/clear", s.handleClearDatabase)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

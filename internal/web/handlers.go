@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"conntrackd/internal/risk"
 	"conntrackd/internal/ruleset"
 	"conntrackd/internal/store"
 )
@@ -27,7 +28,8 @@ type flowRow struct {
 	store.FlowSession
 	RiskScore   int
 	RiskBucket  string
-	RiskReasons []string
+	RiskReasons []risk.RiskReason
+	Approved    bool
 }
 
 func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
@@ -76,15 +78,19 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 	for _, u := range usage {
 		bucketByKey[bucketKey(u.Protocol, u.DstPort, u.Application)] = u
 	}
+	approved, err := s.store.ApprovedSet(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	rows := make([]flowRow, 0, len(sessions))
 	for _, fs := range sessions {
 		rr := s.scoreSession(fs, bucketByKey)
-		reasons := make([]string, 0, len(rr.Reasons))
-		for _, reason := range rr.Reasons {
-			reasons = append(reasons, reason.Description)
-		}
-		rows = append(rows, flowRow{FlowSession: fs, RiskScore: rr.Score, RiskBucket: string(rr.Bucket), RiskReasons: reasons})
+		rows = append(rows, flowRow{
+			FlowSession: fs, RiskScore: rr.Score, RiskBucket: string(rr.Bucket), RiskReasons: rr.Reasons,
+			Approved: approved[bucketKey(fs.Protocol, fs.DstPort, fs.Application)],
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "flows": rows})
@@ -109,7 +115,7 @@ type portRow struct {
 	store.PortUsage
 	RiskScore   int
 	RiskBucket  string
-	RiskReasons []string
+	RiskReasons []risk.RiskReason
 	Approved    bool
 }
 
@@ -129,16 +135,33 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 	rows := make([]portRow, 0, len(usage))
 	for _, u := range usage {
 		rr := s.scoreBucket(u)
-		reasons := make([]string, 0, len(rr.Reasons))
-		for _, reason := range rr.Reasons {
-			reasons = append(reasons, reason.Description)
-		}
 		rows = append(rows, portRow{
-			PortUsage: u, RiskScore: rr.Score, RiskBucket: string(rr.Bucket), RiskReasons: reasons,
+			PortUsage: u, RiskScore: rr.Score, RiskBucket: string(rr.Bucket), RiskReasons: rr.Reasons,
 			Approved: approved[bucketKey(u.Protocol, u.DstPort, u.Application)],
 		})
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+// handlePortConnections lists the individual connections behind one
+// aggregated port_usage bucket — answers "which src/dst IPs actually make
+// up this?" for the Ports & Risk detail view.
+func (s *Server) handlePortConnections(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	q := r.URL.Query()
+	protocol := q.Get("protocol")
+	application := q.Get("application")
+	dstPort := atoiOrZero(q.Get("dst_port"))
+	if protocol == "" {
+		writeError(w, http.StatusBadRequest, "protocol is required")
+		return
+	}
+	sessions, total, err := s.store.SessionsForBucket(id, protocol, dstPort, application, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"total": total, "sessions": sessions})
 }
 
 type approveRequest struct {

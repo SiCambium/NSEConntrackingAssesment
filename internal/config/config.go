@@ -90,8 +90,23 @@ type Config struct {
 	Firewalls  []Firewall      `yaml:"firewalls"`
 	GreyNoise  GreyNoiseConfig `yaml:"greynoise"`
 
+	// EnabledSources gates each internal/enrich lookup source
+	// independently, keyed by its Source.Key() (e.g. "ipwhois", "rdap",
+	// "rdns", "cymru", "shodan") — all off by default, matching
+	// NSELocalSSH's own ip_lookup preference, since these are the only
+	// features in this app that send a bare destination IP to a third
+	// party outside the GreyNoise reputation path.
+	EnabledSources map[string]bool `yaml:"enabled_sources"`
+
 	// path is the file this Config was loaded from; not serialized.
 	path string `yaml:"-"`
+}
+
+// SourceEnabled reports whether an internal/enrich source is turned on.
+// A nil/absent map (the zero value, and every source's default) means
+// disabled — never enabled by omission.
+func (c Config) SourceEnabled(key string) bool {
+	return c.EnabledSources[key]
 }
 
 func (c Config) Addr() string {

@@ -34,10 +34,27 @@ A WKWebView window around the same backend, on a random local port. The header's
 - **Scores risk** (0–100, low/medium/high/critical) for both individual connections and aggregated port/application buckets, combining local heuristics (legacy admin ports, cleartext protocols, unrecognized DPI on an uncommon port, high-volume first contact, low sample confidence) with cached GreyNoise Community reputation lookups for public destination IPs.
 - **Tracks an approved-ports list** — promote a port/application bucket you want to keep open — and generates a **deny-only, manual-review rule preview** for everything else: named deny rules field-compatible with NSELocalSSH's own Firewall screen, meant to be transcribed there. Nothing is ever pushed to a device from here (see caveat below).
 - **Add/edit/remove firewalls from the GUI** — the Settings tab writes straight to `config.yaml` and reloads live pollers immediately (add/edit starts or restarts polling that firewall; remove stops polling it but keeps its history — nothing is deleted).
+- **Sortable Flows/Ports tables** — click any column header to sort (including Risk), click again to reverse.
+- **"Group by src IP → dst IP:port"** checkbox on the Flows tab collapses rows that only differ by ephemeral source port into one row with a count, summed bytes, the worst risk score in the group, and the earliest/latest seen times — useful when one host makes many short-lived connections to the same destination.
+- **Approved column on Flows** — every row shows whether its (protocol, dst port, application) bucket is already on the approved-ports list, not just the aggregated Ports & Risk view.
+- **"What do we know about this IP" lookups** — five free, keyless sources (ipwho.is, RDAP, reverse DNS, Team Cymru ASN, Shodan InternetDB), each independently toggleable in Settings and **off by default**. Enabled sources are queried together with one click on a destination IP in the Flows tab, shown as one combined result. Settings also shows each source's live health (OK / failing / not checked yet, last error, last-checked time) — see `internal/enrich`.
+- **About tab** in the dashboard explains what's actually going on — data sources, privacy notes, the rule-preview caveat, and (if you're evaluating this) that the "Demo Firewall" data is only ever produced by the separate `cmd/replay` dev tool, never by the real app.
 
 ## GreyNoise budget
 
 The free GreyNoise Community API needs no signup but caps unauthenticated use at **10 lookups/day**. conntrackd never looks up a private/RFC1918/CGNAT IP, caches every verdict (14 days, or 3 days for "unknown"), and drips the day's budget out on a timer instead of bursting through it — see `GET /api/firewalls/{id}/reputation/status` for current usage. If you outgrow 10/day, AbuseIPDB (free key, ~1,000/day) is a natural next `threatintel.Provider` to add — see `internal/threatintel/provider.go`.
+
+## The five lookup sources (`internal/enrich`)
+
+| Source | What it gives you | Cost |
+|---|---|---|
+| **ipwho.is** | Org/ISP/country/ASN | Free, no key |
+| **RDAP** | Registered org/network, straight from the responsible registry (via ARIN's bootstrap redirect) | Free, no key, no real rate limit |
+| **Reverse DNS (PTR)** | Hostname (e.g. `edge-star-shv-01-lhr6.facebook.com`) | Free, stdlib-only, no external API at all |
+| **Team Cymru ASN** | ASN + org name via two DNS TXT queries | Free, no key, very lightweight |
+| **Shodan InternetDB** | Open ports/hostnames/known CVEs Shodan has seen on that IP | Free, no key |
+
+Each is independently on/off in Settings (all off by default), and the registry tracks live health per source — see `GET /api/settings/sources`. Not wired in: **ip-api.com** (redundant with ipwho.is) and bulk block lists (**Spamhaus DROP / FireHOL / abuse.ch**) — the latter are architecturally different (a periodic bulk download matched locally against all traffic, not a per-click lookup) and would be a good `internal/threatintel.Provider` addition if GreyNoise's 10/day ever feels limiting, since they have no per-lookup cap at all.
 
 ## Rule preview caveat
 

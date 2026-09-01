@@ -102,3 +102,44 @@ func (s *Store) DistinctDstIPsForBucket(firewallID, protocol string, dstPort int
 	}
 	return out, rows.Err()
 }
+
+// SessionsForBucket returns the individual flow_sessions (open and
+// closed) that make up one port_usage bucket — same grouping key
+// (firewall, protocol, dst_port, application) — most recently seen
+// first, along with the total match count so the caller can show
+// "N of M" if the list was capped. Used by the Ports & Risk detail view
+// to answer "which src/dst IPs actually make up this aggregated bucket."
+func (s *Store) SessionsForBucket(firewallID, protocol string, dstPort int, application string, limit int) ([]FlowSession, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	var total int
+	if err := s.readDB.QueryRow(`
+		SELECT COUNT(*) FROM flow_sessions WHERE firewall_id = ? AND protocol = ? AND dst_port = ? AND application = ?
+	`, firewallID, protocol, dstPort, application).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := s.readDB.Query(`
+		SELECT id, firewall_id, session_key, protocol, origin_src, origin_dst, src_port, dst_port,
+		       nated_ip, nated_port, tcp_state, direction, application, host_name, ttl_last,
+		       tx_packets, tx_bytes, rx_packets, rx_bytes, is_dst_private,
+		       first_seen, last_seen, sample_count, closed_at
+		FROM flow_sessions WHERE firewall_id = ? AND protocol = ? AND dst_port = ? AND application = ?
+		ORDER BY last_seen DESC LIMIT ?
+	`, firewallID, protocol, dstPort, application, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var out []FlowSession
+	for rows.Next() {
+		fs, err := scanFlowSession(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, fs)
+	}
+	return out, total, rows.Err()
+}
