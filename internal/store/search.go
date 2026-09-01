@@ -21,11 +21,16 @@ type FlowSearchFilter struct {
 	TCPState    string
 	HostName    string // substring match
 	OpenOnly    bool
-	Since       *time.Time // last_seen >= Since
-	Until       *time.Time // last_seen <= Until
-	MinBytes    int64
-	Limit       int
-	Offset      int
+	// Scope filters by whether src/dst are private (RFC1918/CGNAT/etc.)
+	// addresses: "internal" (both private), "outbound" (private src,
+	// public dst), "inbound" (public src, private dst), "external" (both
+	// public), or "" for no filter.
+	Scope    string
+	Since    *time.Time // last_seen >= Since
+	Until    *time.Time // last_seen <= Until
+	MinBytes int64
+	Limit    int
+	Offset   int
 }
 
 // SearchSessions returns flow_sessions rows matching filter, newest
@@ -89,6 +94,16 @@ func (s *Store) SearchSessions(f FlowSearchFilter) ([]FlowSession, int, error) {
 		where = append(where, "(tx_bytes + rx_bytes) >= ?")
 		args = append(args, f.MinBytes)
 	}
+	switch f.Scope {
+	case "internal":
+		where = append(where, "is_src_private = 1 AND is_dst_private = 1")
+	case "outbound":
+		where = append(where, "is_src_private = 1 AND is_dst_private = 0")
+	case "inbound":
+		where = append(where, "is_src_private = 0 AND is_dst_private = 1")
+	case "external":
+		where = append(where, "is_src_private = 0 AND is_dst_private = 0")
+	}
 
 	whereSQL := strings.Join(where, " AND ")
 
@@ -102,10 +117,7 @@ func (s *Store) SearchSessions(f FlowSearchFilter) ([]FlowSession, int, error) {
 		limit = 200
 	}
 	query := `
-		SELECT id, firewall_id, session_key, protocol, origin_src, origin_dst, src_port, dst_port,
-		       nated_ip, nated_port, tcp_state, direction, application, host_name, ttl_last,
-		       tx_packets, tx_bytes, rx_packets, rx_bytes, is_dst_private,
-		       first_seen, last_seen, sample_count, closed_at
+		SELECT ` + flowSessionColumns + `
 		FROM flow_sessions WHERE ` + whereSQL + `
 		ORDER BY last_seen DESC LIMIT ? OFFSET ?`
 	rows, err := s.readDB.Query(query, append(args, limit, f.Offset)...)

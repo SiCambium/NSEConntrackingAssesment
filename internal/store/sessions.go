@@ -5,15 +5,21 @@ import (
 	"time"
 )
 
+// flowSessionColumns is the column list scanFlowSession expects, in
+// order. Every query that feeds scanFlowSession must select exactly
+// this — shared as one constant after the column list and the scan
+// order drifted apart twice across different queries.
+const flowSessionColumns = `id, firewall_id, session_key, protocol, origin_src, origin_dst, src_port, dst_port,
+	nated_ip, nated_port, tcp_state, direction, application, host_name, ttl_last,
+	tx_packets, tx_bytes, rx_packets, rx_bytes, is_src_private, is_dst_private,
+	first_seen, last_seen, sample_count, closed_at`
+
 // OpenSessions returns every currently-open session for a firewall, keyed
 // by session_key, so the poller can rebuild its in-memory tracking map on
 // startup instead of treating every flow as brand new after a restart.
 func (s *Store) OpenSessions(firewallID string) (map[string]FlowSession, error) {
 	rows, err := s.readDB.Query(`
-		SELECT id, firewall_id, session_key, protocol, origin_src, origin_dst, src_port, dst_port,
-		       nated_ip, nated_port, tcp_state, direction, application, host_name, ttl_last,
-		       tx_packets, tx_bytes, rx_packets, rx_bytes, is_dst_private,
-		       first_seen, last_seen, sample_count, closed_at
+		SELECT `+flowSessionColumns+`
 		FROM flow_sessions WHERE firewall_id = ? AND closed_at IS NULL
 	`, firewallID)
 	if err != nil {
@@ -42,10 +48,10 @@ func scanFlowSession(row rowScanner) (FlowSession, error) {
 	var natedIP, tcpState, direction, hostName sql.NullString
 	var firstSeen, lastSeen int64
 	var closedAt sql.NullInt64
-	var isDstPrivate int
+	var isSrcPrivate, isDstPrivate int
 	if err := row.Scan(&fs.ID, &fs.FirewallID, &fs.SessionKey, &fs.Protocol, &fs.OriginSrc, &fs.OriginDst,
 		&srcPort, &dstPort, &natedIP, &natedPort, &tcpState, &direction, &fs.Application, &hostName, &ttlLast,
-		&fs.TxPackets, &fs.TxBytes, &fs.RxPackets, &fs.RxBytes, &isDstPrivate,
+		&fs.TxPackets, &fs.TxBytes, &fs.RxPackets, &fs.RxBytes, &isSrcPrivate, &isDstPrivate,
 		&firstSeen, &lastSeen, &fs.SampleCount, &closedAt); err != nil {
 		return FlowSession{}, err
 	}
@@ -57,6 +63,7 @@ func scanFlowSession(row rowScanner) (FlowSession, error) {
 	fs.Direction = direction.String
 	fs.HostName = hostName.String
 	fs.TTLLast = int(ttlLast.Int64)
+	fs.IsSrcPrivate = isSrcPrivate != 0
 	fs.IsDstPrivate = isDstPrivate != 0
 	fs.FirstSeen = time.Unix(firstSeen, 0).UTC()
 	fs.LastSeen = time.Unix(lastSeen, 0).UTC()
@@ -70,12 +77,12 @@ func (s *Store) InsertSession(fs FlowSession) (int64, error) {
 		INSERT INTO flow_sessions (
 			firewall_id, session_key, protocol, origin_src, origin_dst, src_port, dst_port,
 			nated_ip, nated_port, tcp_state, direction, application, host_name, ttl_last,
-			tx_packets, tx_bytes, rx_packets, rx_bytes, is_dst_private,
+			tx_packets, tx_bytes, rx_packets, rx_bytes, is_src_private, is_dst_private,
 			first_seen, last_seen, sample_count, closed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 	`, fs.FirewallID, fs.SessionKey, fs.Protocol, fs.OriginSrc, fs.OriginDst, fs.SrcPort, fs.DstPort,
 		fs.NatedIP, fs.NatedPort, fs.TCPState, fs.Direction, fs.Application, fs.HostName, fs.TTLLast,
-		fs.TxPackets, fs.TxBytes, fs.RxPackets, fs.RxBytes, boolToInt(fs.IsDstPrivate),
+		fs.TxPackets, fs.TxBytes, fs.RxPackets, fs.RxBytes, boolToInt(fs.IsSrcPrivate), boolToInt(fs.IsDstPrivate),
 		fs.FirstSeen.Unix(), fs.LastSeen.Unix(), fs.SampleCount)
 	if err != nil {
 		return 0, err

@@ -3,8 +3,8 @@
 const REFRESH_STORAGE_KEY = "conntrack.refreshSeconds";
 const state = {
   firewallId: null, firewalls: [], pollIntervals: [30], refreshTimer: null,
-  sourcesEnabled: false, rawFlows: [], portRows: [],
-  sort: { flows: { key: null, dir: 1 }, ports: { key: null, dir: 1 } },
+  sourcesEnabled: false, rawFlows: [], portRows: [], uniquePortRows: [], uniquePortRowsAll: [],
+  sort: { flows: { key: null, dir: 1 }, ports: { key: null, dir: 1 }, uniqueports: { key: null, dir: 1 } },
 };
 
 function $(sel, root) { return (root || document).querySelector(sel); }
@@ -34,8 +34,10 @@ function badge(bucket) {
   return `<span class="badge ${b}">${b}</span>`;
 }
 
-function approvedBadge(approved) {
-  return approved ? `<span class="badge approved">approved</span>` : `<span class="badge not-approved">no</span>`;
+const SCOPE_LABELS = { internal: "Internal", outbound: "Outbound", inbound: "Inbound", external: "External", mixed: "Mixed" };
+function scopeBadge(scope) {
+  if (!scope) return "";
+  return `<span class="badge scope-${scope}">${SCOPE_LABELS[scope] || scope}</span>`;
 }
 
 // Risk is always shown two ways: the badge is the COMBINED score; this
@@ -118,6 +120,7 @@ function flowDetailHTML(f) {
     <dt>Source</dt><dd>${f.OriginSrc}${f.SrcPort ? ":" + f.SrcPort : ""}</dd>
     <dt>Destination</dt><dd>${f.OriginDst}${f.DstPort ? ":" + f.DstPort : ""}</dd>
     <dt>Service</dt><dd>${portService(f.DstPort) || "—"}</dd>
+    <dt>Scope</dt><dd>${scopeBadge(f.Scope) || "—"}</dd>
     <dt>Direction</dt><dd>${f.Direction || "—"}</dd>
     <dt>Application</dt><dd>${f.Application || "—"}</dd>
     <dt>TCP state</dt><dd>${f.TCPState || "—"}</dd>
@@ -129,7 +132,6 @@ function flowDetailHTML(f) {
     <dt>Last seen</dt><dd>${fmtTime(f.LastSeen)}</dd>
     <dt>Samples</dt><dd>${f.SampleCount ?? "—"}</dd>
     <dt>Status</dt><dd>${f.ClosedAt ? "closed " + fmtTime(f.ClosedAt) : "open"}</dd>
-    <dt>Approved</dt><dd>${approvedBadge(f.Approved)}</dd>
   </dl>`;
   return dl + riskBreakdownHTML(f.RiskScore, f.RiskBucket, f.RiskReasons) + lookupSectionHTML(f.OriginDst);
 }
@@ -139,13 +141,13 @@ function portDetailHTML(u) {
     <dt>Protocol</dt><dd>${u.Protocol}</dd>
     <dt>Port</dt><dd>${u.DstPort || "—"}</dd>
     <dt>Service</dt><dd>${portService(u.DstPort) || "—"}</dd>
+    <dt>Scope</dt><dd>${scopeBadge(u.Scope) || "—"}</dd>
     <dt>Application</dt><dd>${u.Application || "—"}</dd>
     <dt>Samples</dt><dd>${u.SampleCount}</dd>
     <dt>Distinct dst IPs</dt><dd>${u.DistinctDstIPs}</dd>
     <dt>Total bytes</dt><dd>${fmtBytes(u.TotalBytes)}</dd>
     <dt>First seen</dt><dd>${fmtTime(u.FirstSeen)}</dd>
     <dt>Last seen</dt><dd>${fmtTime(u.LastSeen)}</dd>
-    <dt>Approved</dt><dd>${approvedBadge(u.Approved)}</dd>
   </dl>`;
   return dl + riskBreakdownHTML(u.RiskScore, u.RiskBucket, u.RiskReasons) +
     `<h4>Connections in this bucket</h4><div id="bucket-connections" class="hint">Loading…</div>`;
@@ -211,7 +213,7 @@ function refreshActiveTab() {
   if (!state.firewallId) return;
   if (tab === "flows") loadFlows();
   else if (tab === "ports") loadPorts();
-  else if (tab === "approved") loadApproved();
+  else if (tab === "uniqueports") loadUniquePorts();
   else if (tab === "rules") loadRules();
 }
 
@@ -399,10 +401,11 @@ $("#firewall-select").addEventListener("change", e => {
 const flowsTable = $("#flows-table");
 const FLOW_ACCESSORS = {
   risk: f => f.RiskScore, protocol: f => f.Protocol, src: f => f.OriginSrc, dst: f => f.OriginDst,
-  service: f => portService(f.DstPort), count: f => f._count || 1, direction: f => f.Direction || "",
+  service: f => portService(f.DstPort), count: f => f._count || 1, scope: f => f.Scope || "",
+  direction: f => f.Direction || "",
   application: f => f.Application || "", state: f => f.TCPState || "", host: f => f.HostName || "",
   bytes: f => (f.TxBytes || 0) + (f.RxBytes || 0),
-  first_seen: f => f.FirstSeen || "", last_seen: f => f.LastSeen || "", approved: f => f.Approved ? 1 : 0,
+  first_seen: f => f.FirstSeen || "", last_seen: f => f.LastSeen || "",
 };
 makeSortable(flowsTable, "flows", FLOW_ACCESSORS, () => state.rawFlows, renderFlows);
 
@@ -411,6 +414,7 @@ $("#flow-filters").addEventListener("submit", e => {
   loadFlows();
 });
 $("#group-by-dst").addEventListener("change", () => renderFlows(currentFlowRows()));
+$("select[name=scope]", $("#flow-filters")).addEventListener("change", loadFlows);
 
 function currentFlowRows() {
   const rows = $("#group-by-dst").checked ? groupFlows(state.rawFlows) : state.rawFlows;
@@ -437,7 +441,6 @@ function groupFlows(rows) {
     if (f.FirstSeen < g.FirstSeen) g.FirstSeen = f.FirstSeen;
     if (f.LastSeen > g.LastSeen) g.LastSeen = f.LastSeen;
     if (f.RiskScore > g.RiskScore) { g.RiskScore = f.RiskScore; g.RiskBucket = f.RiskBucket; g.RiskReasons = f.RiskReasons; }
-    g.Approved = g.Approved || f.Approved;
   }
   return [...groups.values()];
 }
@@ -466,6 +469,7 @@ function renderFlows(rows) {
       <td>${ipCell(f.OriginDst, f.DstPort)}</td>
       <td>${portService(f.DstPort)}</td>
       <td>${f._count > 1 ? "×" + f._count : ""}</td>
+      <td>${scopeBadge(f.Scope)}</td>
       <td>${f.Direction || ""}</td>
       <td>${f.Application || ""}</td>
       <td>${f.TCPState || ""}</td>
@@ -473,7 +477,6 @@ function renderFlows(rows) {
       <td>${fmtBytes((f.TxBytes || 0) + (f.RxBytes || 0))}</td>
       <td>${fmtTime(f.FirstSeen)}</td>
       <td>${fmtTime(f.LastSeen)}</td>
-      <td>${approvedBadge(f.Approved)}</td>
       <td class="reasons-cell" title="${reasonsTitle(f.RiskReasons)}">${(f.RiskReasons || []).length ? "ⓘ" : ""}</td>
     </tr>
   `).join("");
@@ -489,7 +492,8 @@ function renderFlows(rows) {
 // ---- Ports & risk ----
 const portsTable = $("#ports-table");
 const PORT_ACCESSORS = {
-  risk: u => u.RiskScore, protocol: u => u.Protocol, port: u => u.DstPort || 0, application: u => u.Application || "",
+  risk: u => u.RiskScore, protocol: u => u.Protocol, port: u => u.DstPort || 0, scope: u => u.Scope || "",
+  application: u => u.Application || "",
   samples: u => u.SampleCount, distinct_ips: u => u.DistinctDstIPs, bytes: u => u.TotalBytes,
   first_seen: u => u.FirstSeen || "", last_seen: u => u.LastSeen || "",
 };
@@ -507,6 +511,7 @@ function renderPorts(rows) {
       <td>${riskBadgeButton(u.RiskBucket)}</td>
       <td>${u.Protocol}</td>
       <td>${u.DstPort || ""}</td>
+      <td>${scopeBadge(u.Scope)}</td>
       <td>${u.Application || ""}</td>
       <td>${u.SampleCount}</td>
       <td>${u.DistinctDstIPs}</td>
@@ -514,11 +519,6 @@ function renderPorts(rows) {
       <td>${fmtTime(u.FirstSeen)}</td>
       <td>${fmtTime(u.LastSeen)}</td>
       <td class="reasons-cell">${reasonsList(u.RiskReasons)}</td>
-      <td>
-        ${u.Approved
-          ? `<button class="secondary" data-action="unapprove" data-protocol="${u.Protocol}" data-port="${u.DstPort}" data-app="${u.Application || ""}">Unapprove</button>`
-          : `<button data-action="approve" data-protocol="${u.Protocol}" data-port="${u.DstPort}" data-app="${u.Application || ""}">Approve</button>`}
-      </td>
     </tr>
   `).join("");
 
@@ -529,43 +529,124 @@ function renderPorts(rows) {
       loadBucketConnections(u);
     });
   });
-
-  $all("button[data-action]", tbody).forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const { action, protocol, port, app } = btn.dataset;
-      const body = { protocol, dst_port: parseInt(port, 10) || 0, application: app, approved_by: "web-ui" };
-      await api(`/api/firewalls/${state.firewallId}/ports/${action}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      loadPorts();
-    });
-  });
 }
 
-// ---- Approved ----
-async function loadApproved() {
-  const rows = await api(`/api/firewalls/${state.firewallId}/approved`);
-  const tbody = $("#approved-table tbody");
-  tbody.innerHTML = rows.map(a => `
+// ---- Unique Ports (protocol+port only, collapsed across applications) ----
+const uniquePortsTable = $("#uniqueports-table");
+const UNIQUEPORT_ACCESSORS = {
+  risk: g => g.RiskScore, protocol: g => g.Protocol, port: g => g.DstPort || 0,
+  service: g => portService(g.DstPort), scope: g => g.Scope || "", apps: g => g.Applications.length,
+  samples: g => g.SampleCount, distinct_ips: g => g.DistinctDstIPs, bytes: g => g.TotalBytes,
+  first_seen: g => g.FirstSeen || "", last_seen: g => g.LastSeen || "",
+};
+makeSortable(uniquePortsTable, "uniqueports", UNIQUEPORT_ACCESSORS, () => state.uniquePortRows, renderUniquePorts);
+
+// groupByPort collapses port_usage buckets (already grouped by
+// protocol+port+application) down to protocol+port only — e.g. every
+// application riding on TCP 443 becomes one row instead of one per app.
+// UDP and TCP on the same port number are always kept separate since
+// they're different protocols. The worst (highest) risk score among the
+// collapsed buckets wins, same rule used everywhere else in this app.
+// deriveScope mirrors store.PortUsage.Scope()'s Go logic: "mixed" when
+// more than one category has been seen, "" when none have (a bucket that
+// predates scope tracking).
+function deriveScope(internal, outbound, inbound, external) {
+  const seen = [internal > 0, outbound > 0, inbound > 0, external > 0].filter(Boolean).length;
+  if (seen === 0) return "";
+  if (seen > 1) return "mixed";
+  if (internal > 0) return "internal";
+  if (outbound > 0) return "outbound";
+  if (inbound > 0) return "inbound";
+  return "external";
+}
+
+function groupByPort(rows) {
+  const groups = new Map();
+  for (const u of rows) {
+    const key = `${u.Protocol}|${u.DstPort}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        Protocol: u.Protocol, DstPort: u.DstPort, Applications: [],
+        SampleCount: 0, DistinctDstIPs: 0, TotalBytes: 0,
+        FirstSeen: u.FirstSeen, LastSeen: u.LastSeen,
+        RiskScore: 0, RiskBucket: "low", RiskReasons: [],
+        InternalCount: 0, OutboundCount: 0, InboundCount: 0, ExternalCount: 0,
+      };
+      groups.set(key, g);
+    }
+    g.Applications.push(u);
+    g.SampleCount += u.SampleCount;
+    g.DistinctDstIPs += u.DistinctDstIPs;
+    g.TotalBytes += u.TotalBytes;
+    g.InternalCount += u.InternalCount || 0;
+    g.OutboundCount += u.OutboundCount || 0;
+    g.InboundCount += u.InboundCount || 0;
+    g.ExternalCount += u.ExternalCount || 0;
+    if (u.FirstSeen < g.FirstSeen) g.FirstSeen = u.FirstSeen;
+    if (u.LastSeen > g.LastSeen) g.LastSeen = u.LastSeen;
+    if (u.RiskScore > g.RiskScore) { g.RiskScore = u.RiskScore; g.RiskBucket = u.RiskBucket; g.RiskReasons = u.RiskReasons; }
+  }
+  return [...groups.values()].map(g => ({ ...g, Scope: deriveScope(g.InternalCount, g.OutboundCount, g.InboundCount, g.ExternalCount) }));
+}
+
+// A single scan or one-off probe leaves behind a long tail of ports seen
+// only a handful of times — this filter (default 2) hides those so the
+// table reads as "ports actually in regular use," not every port ever
+// touched once. Purely a display filter over already-fetched data, so
+// changing it re-renders instantly with no new request.
+async function loadUniquePorts() {
+  const usage = await api(`/api/firewalls/${state.firewallId}/ports`);
+  state.uniquePortRowsAll = groupByPort(usage);
+  applyUniquePortsFilter();
+}
+
+function applyUniquePortsFilter() {
+  const minSamples = parseInt($("#uniqueports-min-samples").value, 10) || 0;
+  state.uniquePortRows = state.uniquePortRowsAll.filter(g => g.SampleCount >= minSamples);
+  renderUniquePorts(sortRows(state.uniquePortRows, UNIQUEPORT_ACCESSORS, state.sort.uniqueports));
+}
+$("#uniqueports-min-samples").addEventListener("input", applyUniquePortsFilter);
+
+function renderUniquePorts(rows) {
+  const tbody = $("tbody", uniquePortsTable);
+  tbody.innerHTML = rows.map(g => `
     <tr>
-      <td>${a.Protocol}</td>
-      <td>${a.DstPort || ""}</td>
-      <td>${a.Application || ""}</td>
-      <td>${a.Label || ""}</td>
-      <td>${a.ApprovedBy || ""}</td>
-      <td>${fmtTime(a.ApprovedAt)}</td>
-      <td><button class="secondary" data-protocol="${a.Protocol}" data-port="${a.DstPort}" data-app="${a.Application || ""}">Unapprove</button></td>
+      <td>${riskBadgeButton(g.RiskBucket)}</td>
+      <td>${g.Protocol}</td>
+      <td>${g.DstPort || ""}</td>
+      <td>${portService(g.DstPort)}</td>
+      <td>${scopeBadge(g.Scope)}</td>
+      <td>${g.Applications.length}</td>
+      <td>${g.SampleCount}</td>
+      <td>${g.DistinctDstIPs}</td>
+      <td>${fmtBytes(g.TotalBytes)}</td>
+      <td>${fmtTime(g.FirstSeen)}</td>
+      <td>${fmtTime(g.LastSeen)}</td>
     </tr>
   `).join("");
 
-  $all("button", tbody).forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const { protocol, port, app } = btn.dataset;
-      const body = { protocol, dst_port: parseInt(port, 10) || 0, application: app };
-      await api(`/api/firewalls/${state.firewallId}/ports/unapprove`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      loadApproved();
+  $all(".risk-badge-btn", tbody).forEach((btn, i) => {
+    btn.addEventListener("click", () => {
+      const g = rows[i];
+      const appRows = g.Applications
+        .slice()
+        .sort((a, b) => b.RiskScore - a.RiskScore)
+        .map(u => `<li>${u.Application || "(no application tag)"} ${scopeBadge(u.Scope)}
+          <span class="hint">· ${badge(u.RiskBucket)} risk ${u.RiskScore} · ${u.SampleCount} sample(s) · ${fmtBytes(u.TotalBytes)} · ${u.DistinctDstIPs} dst IP(s)</span></li>`)
+        .join("");
+      const body = `<dl class="detail-dl">
+          <dt>Protocol</dt><dd>${g.Protocol}</dd>
+          <dt>Port</dt><dd>${g.DstPort || "—"}</dd>
+          <dt>Service</dt><dd>${portService(g.DstPort) || "—"}</dd>
+          <dt>Total samples</dt><dd>${g.SampleCount}</dd>
+          <dt>Total bytes</dt><dd>${fmtBytes(g.TotalBytes)}</dd>
+          <dt>First seen</dt><dd>${fmtTime(g.FirstSeen)}</dd>
+          <dt>Last seen</dt><dd>${fmtTime(g.LastSeen)}</dd>
+        </dl>` +
+        riskBreakdownHTML(g.RiskScore, g.RiskBucket, g.RiskReasons) +
+        `<h4>${g.Applications.length} application(s) on this port</h4><ul class="reasons-list">${appRows}</ul>`;
+      openDetailModal(`${g.Protocol} port ${g.DstPort || "—"} — all applications`, body);
     });
   });
 }

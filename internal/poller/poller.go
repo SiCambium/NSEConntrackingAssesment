@@ -160,7 +160,9 @@ func (p *Poller) closeMissing(seen map[string]bool, now time.Time) {
 
 func (p *Poller) applyFlow(f nse.ConntrackFlow, key string, now time.Time) error {
 	srcPort, dstPort := atoiSafe(f.SrcPort), atoiSafe(f.DstPort)
-	isPrivate := IsPrivateOrReserved(f.OriginDst)
+	isSrcPrivate := IsPrivateOrReserved(f.OriginSrc)
+	isDstPrivate := IsPrivateOrReserved(f.OriginDst)
+	scope := store.ClassifyScope(isSrcPrivate, isDstPrivate)
 	newBytes := f.TxBytes + f.RxBytes
 
 	tracked, existing := p.open[key]
@@ -171,7 +173,7 @@ func (p *Poller) applyFlow(f nse.ConntrackFlow, key string, now time.Time) error
 			NatedIP: f.NatedIP, NatedPort: atoiSafe(f.NatedPort), TCPState: f.TCPState,
 			Direction: f.Direction, Application: f.Application, HostName: f.HostName,
 			TTLLast: atoiSafe(f.TTL), TxPackets: f.TxPackets, TxBytes: f.TxBytes,
-			RxPackets: f.RxPackets, RxBytes: f.RxBytes, IsDstPrivate: isPrivate,
+			RxPackets: f.RxPackets, RxBytes: f.RxBytes, IsSrcPrivate: isSrcPrivate, IsDstPrivate: isDstPrivate,
 			FirstSeen: now, LastSeen: now, SampleCount: 1,
 		}
 		id, err := p.store.InsertSession(fs)
@@ -181,10 +183,10 @@ func (p *Poller) applyFlow(f nse.ConntrackFlow, key string, now time.Time) error
 		if err := p.store.InsertSample(sampleFromFlow(id, p.FirewallID, "start", now, f)); err != nil {
 			return err
 		}
-		if err := p.store.BumpPortUsage(p.FirewallID, f.Protocol, dstPort, f.Application, f.OriginDst, now, newBytes, true); err != nil {
+		if err := p.store.BumpPortUsage(p.FirewallID, f.Protocol, dstPort, f.Application, f.OriginDst, now, newBytes, true, scope); err != nil {
 			return err
 		}
-		if !isPrivate && p.enqueue != nil {
+		if !isDstPrivate && p.enqueue != nil {
 			p.enqueue(p.FirewallID, f.OriginDst, 0)
 		}
 		p.open[key] = &trackedSession{sessionID: id, txBytes: f.TxBytes, rxBytes: f.RxBytes, tcpState: f.TCPState, lastSampleAt: now}
@@ -205,7 +207,7 @@ func (p *Poller) applyFlow(f nse.ConntrackFlow, key string, now time.Time) error
 	if err := p.store.UpdateSession(tracked.sessionID, fs); err != nil {
 		return err
 	}
-	if err := p.store.BumpPortUsage(p.FirewallID, f.Protocol, dstPort, f.Application, f.OriginDst, now, delta, false); err != nil {
+	if err := p.store.BumpPortUsage(p.FirewallID, f.Protocol, dstPort, f.Application, f.OriginDst, now, delta, false, scope); err != nil {
 		return err
 	}
 

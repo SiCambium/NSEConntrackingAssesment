@@ -5,6 +5,64 @@ import (
 	"time"
 )
 
+func TestBumpPortUsage_ScopeCounting(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SyncFirewall("home", "Home", "10.0.0.1", 22); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+
+	// Two new sessions in the same bucket, different scopes — a bucket
+	// really can span more than one category.
+	if err := s.BumpPortUsage("home", "TCP", 25, "smtp", "a", now, 100, true, ScopeInternal); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BumpPortUsage("home", "TCP", 25, "smtp", "b", now, 100, true, ScopeOutbound); err != nil {
+		t.Fatal(err)
+	}
+	// A poll update (isNewSession=false) must NOT double-count scope.
+	if err := s.BumpPortUsage("home", "TCP", 25, "smtp", "a", now, 50, false, ScopeInternal); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err := s.ListPortUsage("home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usage) != 1 {
+		t.Fatalf("expected 1 bucket, got %d", len(usage))
+	}
+	u := usage[0]
+	if u.InternalCount != 1 || u.OutboundCount != 1 || u.InboundCount != 0 || u.ExternalCount != 0 {
+		t.Fatalf("unexpected scope counts: %+v", u)
+	}
+	if got := u.Scope(); got != "mixed" {
+		t.Fatalf("Scope() = %q, want mixed", got)
+	}
+}
+
+func TestPortUsage_Scope(t *testing.T) {
+	cases := []struct {
+		name string
+		u    PortUsage
+		want string
+	}{
+		{"none seen", PortUsage{}, ""},
+		{"internal only", PortUsage{InternalCount: 3}, "internal"},
+		{"outbound only", PortUsage{OutboundCount: 1}, "outbound"},
+		{"inbound only", PortUsage{InboundCount: 2}, "inbound"},
+		{"external only", PortUsage{ExternalCount: 1}, "external"},
+		{"mixed", PortUsage{InternalCount: 1, OutboundCount: 1}, "mixed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.u.Scope(); got != c.want {
+				t.Errorf("Scope() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestSessionsForBucket_ReturnsMatchingConnectionsMostRecentFirst(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.SyncFirewall("home", "Home", "10.0.0.1", 22); err != nil {

@@ -41,6 +41,7 @@ type FlowSession struct {
 	RxPackets int64
 	RxBytes   int64
 
+	IsSrcPrivate bool
 	IsDstPrivate bool
 	FirstSeen    time.Time
 	LastSeen     time.Time
@@ -89,6 +90,45 @@ type PortUsage struct {
 	TotalBytes     int64
 	DistinctDstIPs int
 	UpdatedAt      time.Time
+
+	// Per-scope session counts — see migrations/0003_port_usage_scope.sql.
+	InternalCount int
+	OutboundCount int
+	InboundCount  int
+	ExternalCount int
+}
+
+// Scope summarizes a bucket's traffic direction: "internal" (LAN<->LAN
+// only), "outbound" (LAN->WAN only), "inbound" (WAN->LAN only),
+// "external" (WAN<->WAN only), "mixed" (more than one category seen), or
+// "" if the bucket predates scope tracking and has never been updated
+// since (all counts still zero).
+func (u PortUsage) Scope() string {
+	seen := 0
+	last := ""
+	if u.InternalCount > 0 {
+		seen++
+		last = "internal"
+	}
+	if u.OutboundCount > 0 {
+		seen++
+		last = "outbound"
+	}
+	if u.InboundCount > 0 {
+		seen++
+		last = "inbound"
+	}
+	if u.ExternalCount > 0 {
+		seen++
+		last = "external"
+	}
+	if seen == 0 {
+		return ""
+	}
+	if seen > 1 {
+		return "mixed"
+	}
+	return last
 }
 
 // ApprovedPort is a user decision: "leave this open." Promoted from a

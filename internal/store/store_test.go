@@ -58,7 +58,7 @@ func TestSessionAndPortUsageLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertSample: %v", err)
 	}
-	if err := s.BumpPortUsage("home", "TCP", 443, "amazon_aws", fs.OriginDst, now, fs.TxBytes+fs.RxBytes, true); err != nil {
+	if err := s.BumpPortUsage("home", "TCP", 443, "amazon_aws", fs.OriginDst, now, fs.TxBytes+fs.RxBytes, true, ScopeOutbound); err != nil {
 		t.Fatalf("BumpPortUsage: %v", err)
 	}
 
@@ -71,7 +71,7 @@ func TestSessionAndPortUsageLifecycle(t *testing.T) {
 		t.Fatalf("UpdateSession: %v", err)
 	}
 	delta := (8000 + 15000) - (5835 + 9386)
-	if err := s.BumpPortUsage("home", "TCP", 443, "amazon_aws", fs.OriginDst, later, int64(delta), false); err != nil {
+	if err := s.BumpPortUsage("home", "TCP", 443, "amazon_aws", fs.OriginDst, later, int64(delta), false, ScopeOutbound); err != nil {
 		t.Fatalf("BumpPortUsage delta: %v", err)
 	}
 
@@ -148,6 +148,61 @@ func TestSessionAndPortUsageLifecycle(t *testing.T) {
 	}
 	if len(samples) != 2 {
 		t.Fatalf("expected 2 sample events (start, end), got %d", len(samples))
+	}
+}
+
+func TestSearchSessions_ScopeFilter(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SyncFirewall("home", "Home", "10.0.0.1", 22); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+
+	cases := []struct {
+		key                    string
+		srcPrivate, dstPrivate bool
+	}{
+		{"internal-flow", true, true},   // LAN <-> LAN
+		{"outbound-flow", true, false},  // LAN -> WAN
+		{"inbound-flow", false, true},   // WAN -> LAN
+		{"external-flow", false, false}, // WAN <-> WAN (e.g. transit/relay)
+	}
+	for _, c := range cases {
+		fs := FlowSession{
+			FirewallID: "home", SessionKey: c.key, Protocol: "TCP", OriginSrc: "a", OriginDst: "b",
+			IsSrcPrivate: c.srcPrivate, IsDstPrivate: c.dstPrivate, FirstSeen: now, LastSeen: now, SampleCount: 1,
+		}
+		if _, err := s.InsertSession(fs); err != nil {
+			t.Fatalf("InsertSession(%s): %v", c.key, err)
+		}
+	}
+
+	tests := []struct {
+		scope   string
+		wantKey string
+	}{
+		{"internal", "internal-flow"},
+		{"outbound", "outbound-flow"},
+		{"inbound", "inbound-flow"},
+		{"external", "external-flow"},
+	}
+	for _, tc := range tests {
+		results, total, err := s.SearchSessions(FlowSearchFilter{FirewallID: "home", Scope: tc.scope})
+		if err != nil {
+			t.Fatalf("SearchSessions(scope=%s): %v", tc.scope, err)
+		}
+		if total != 1 || len(results) != 1 || results[0].SessionKey != tc.wantKey {
+			t.Fatalf("scope=%s: got total=%d results=%v, want exactly %q", tc.scope, total, results, tc.wantKey)
+		}
+	}
+
+	// No scope filter: all four.
+	_, total, err := s.SearchSessions(FlowSearchFilter{FirewallID: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 4 {
+		t.Fatalf("expected all 4 sessions with no scope filter, got %d", total)
 	}
 }
 

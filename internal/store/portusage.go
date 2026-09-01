@@ -2,14 +2,41 @@ package store
 
 import "time"
 
+// ScopeInternal etc. classify a flow by whether its src/dst are private
+// (RFC1918/CGNAT/etc.) addresses — see FlowSearchFilter.Scope for the
+// same categories applied to a search filter.
+const (
+	ScopeInternal = "internal" // src private, dst private
+	ScopeOutbound = "outbound" // src private, dst public
+	ScopeInbound  = "inbound"  // src public, dst private
+	ScopeExternal = "external" // src public, dst public
+)
+
+// ClassifyScope maps a src/dst private-address pair to one of the four
+// Scope* constants.
+func ClassifyScope(srcPrivate, dstPrivate bool) string {
+	switch {
+	case srcPrivate && dstPrivate:
+		return ScopeInternal
+	case srcPrivate && !dstPrivate:
+		return ScopeOutbound
+	case !srcPrivate && dstPrivate:
+		return ScopeInbound
+	default:
+		return ScopeExternal
+	}
+}
+
 // BumpPortUsage incrementally updates the permanent port_usage rollup for
 // (firewallID, protocol, dstPort, application). byteDelta should be the
 // change in tx+rx bytes since this session's last poll (not the session's
 // cumulative total) so totals stay correct even after old raw history is
 // pruned. dstIP is recorded into port_usage_dst_ips (a no-op if already
 // present) so distinct_dst_ips stays exact forever without depending on
-// prunable flow_samples history.
-func (s *Store) BumpPortUsage(firewallID, protocol string, dstPort int, application, dstIP string, seenAt time.Time, byteDelta int64, isNewSession bool) error {
+// prunable flow_samples history. scope (one of the Scope* constants) is
+// only counted when isNewSession is true, matching sample_count's own
+// "count sessions, not polls" semantics.
+func (s *Store) BumpPortUsage(firewallID, protocol string, dstPort int, application, dstIP string, seenAt time.Time, byteDelta int64, isNewSession bool, scope string) error {
 	tx, err := s.writeDB.Begin()
 	if err != nil {
 		return err
@@ -20,16 +47,31 @@ func (s *Store) BumpPortUsage(firewallID, protocol string, dstPort int, applicat
 	sampleDelta := 0
 	if isNewSession {
 		sampleDelta = 1
+	} else {
+		scope = "" // don't double-count an existing session's scope on every poll
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO port_usage (firewall_id, protocol, dst_port, application, first_seen, last_seen, sample_count, total_bytes, distinct_dst_ips, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+		INSERT INTO port_usage (
+			firewall_id, protocol, dst_port, application, first_seen, last_seen,
+			sample_count, total_bytes, distinct_dst_ips, updated_at,
+			internal_count, outbound_count, inbound_count, external_count
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?,
+			CASE WHEN ? = 'internal' THEN 1 ELSE 0 END, CASE WHEN ? = 'outbound' THEN 1 ELSE 0 END,
+			CASE WHEN ? = 'inbound' THEN 1 ELSE 0 END, CASE WHEN ? = 'external' THEN 1 ELSE 0 END)
 		ON CONFLICT(firewall_id, protocol, dst_port, application) DO UPDATE SET
 			last_seen = excluded.last_seen,
 			sample_count = port_usage.sample_count + ?,
 			total_bytes = port_usage.total_bytes + ?,
-			updated_at = excluded.updated_at
-	`, firewallID, protocol, dstPort, application, now, now, sampleDelta, byteDelta, now, sampleDelta, byteDelta); err != nil {
+			updated_at = excluded.updated_at,
+			internal_count = port_usage.internal_count + (CASE WHEN ? = 'internal' THEN 1 ELSE 0 END),
+			outbound_count = port_usage.outbound_count + (CASE WHEN ? = 'outbound' THEN 1 ELSE 0 END),
+			inbound_count = port_usage.inbound_count + (CASE WHEN ? = 'inbound' THEN 1 ELSE 0 END),
+			external_count = port_usage.external_count + (CASE WHEN ? = 'external' THEN 1 ELSE 0 END)
+	`, firewallID, protocol, dstPort, application, now, now, sampleDelta, byteDelta, now,
+		scope, scope, scope, scope,
+		sampleDelta, byteDelta,
+		scope, scope, scope, scope); err != nil {
 		return err
 	}
 
@@ -56,7 +98,8 @@ func (s *Store) BumpPortUsage(firewallID, protocol string, dstPort int, applicat
 func (s *Store) ListPortUsage(firewallID string) ([]PortUsage, error) {
 	rows, err := s.readDB.Query(`
 		SELECT id, firewall_id, protocol, dst_port, application, first_seen, last_seen,
-		       sample_count, total_bytes, distinct_dst_ips, updated_at
+		       sample_count, total_bytes, distinct_dst_ips, updated_at,
+		       internal_count, outbound_count, inbound_count, external_count
 		FROM port_usage WHERE firewall_id = ? ORDER BY last_seen DESC
 	`, firewallID)
 	if err != nil {
@@ -69,7 +112,8 @@ func (s *Store) ListPortUsage(firewallID string) ([]PortUsage, error) {
 		var u PortUsage
 		var firstSeen, lastSeen, updatedAt int64
 		if err := rows.Scan(&u.ID, &u.FirewallID, &u.Protocol, &u.DstPort, &u.Application,
-			&firstSeen, &lastSeen, &u.SampleCount, &u.TotalBytes, &u.DistinctDstIPs, &updatedAt); err != nil {
+			&firstSeen, &lastSeen, &u.SampleCount, &u.TotalBytes, &u.DistinctDstIPs, &updatedAt,
+			&u.InternalCount, &u.OutboundCount, &u.InboundCount, &u.ExternalCount); err != nil {
 			return nil, err
 		}
 		u.FirstSeen = time.Unix(firstSeen, 0).UTC()
@@ -121,10 +165,7 @@ func (s *Store) SessionsForBucket(firewallID, protocol string, dstPort int, appl
 	}
 
 	rows, err := s.readDB.Query(`
-		SELECT id, firewall_id, session_key, protocol, origin_src, origin_dst, src_port, dst_port,
-		       nated_ip, nated_port, tcp_state, direction, application, host_name, ttl_last,
-		       tx_packets, tx_bytes, rx_packets, rx_bytes, is_dst_private,
-		       first_seen, last_seen, sample_count, closed_at
+		SELECT `+flowSessionColumns+`
 		FROM flow_sessions WHERE firewall_id = ? AND protocol = ? AND dst_port = ? AND application = ?
 		ORDER BY last_seen DESC LIMIT ?
 	`, firewallID, protocol, dstPort, application, limit)

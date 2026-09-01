@@ -60,7 +60,7 @@ main { padding: 20px; }
 .filters {
   display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;
 }
-.filters input {
+.filters input, .filters select {
   background: var(--panel); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 7px 10px; font-size: 13px;
 }
@@ -141,6 +141,12 @@ th[data-sort].sorted .sort-arrow { opacity: 1; color: var(--accent); }
 
 .badge.approved { background: var(--low); color: #0d1117; }
 .badge.not-approved { background: var(--border); color: var(--muted); }
+
+.badge.scope-internal { background: var(--muted); color: #0d1117; }
+.badge.scope-outbound { background: var(--cat-web); color: #fff; }
+.badge.scope-inbound { background: var(--cat-admin); color: #fff; }
+.badge.scope-external { background: var(--cat-mail); color: #0d1117; }
+.badge.scope-mixed { background: var(--cat-realtime); color: #0d1117; }
 
 .about { max-width: 80ch; line-height: 1.6; }
 .about h2 { font-size: 16px; margin: 24px 0 8px; }

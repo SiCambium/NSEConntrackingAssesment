@@ -25,7 +25,7 @@ func TestClearAllHistory_WipesDataButKeepsFirewall(t *testing.T) {
 	if err := s.InsertSample(FlowSample{SessionID: id, FirewallID: "home", EventType: "start", SeenAt: now, Protocol: "TCP", OriginSrc: "a", OriginDst: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.BumpPortUsage("home", "TCP", 2, "", "b", now, 100, true); err != nil {
+	if err := s.BumpPortUsage("home", "TCP", 2, "", "b", now, 100, true, ScopeOutbound); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ApprovePort("home", "TCP", 2, "", "label", "tester"); err != nil {

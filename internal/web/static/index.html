@@ -22,7 +22,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="flows">Flows</button>
     <button class="tab-btn" data-tab="ports">Ports &amp; Risk</button>
-    <button class="tab-btn" data-tab="approved">Approved</button>
+    <button class="tab-btn" data-tab="uniqueports">Unique Ports</button>
     <button class="tab-btn" data-tab="rules">Rule Preview</button>
     <button class="tab-btn" data-tab="settings">Settings</button>
     <button class="tab-btn" data-tab="about">About</button>
@@ -40,6 +40,13 @@
         <input name="application" placeholder="Application">
         <input name="tcp_state" placeholder="TCP state">
         <input name="host_name" placeholder="Host name contains">
+        <select name="scope">
+          <option value="">All traffic</option>
+          <option value="internal">Internal ↔ Internal</option>
+          <option value="outbound">Internal → External</option>
+          <option value="inbound">External → Internal</option>
+          <option value="external">External ↔ External</option>
+        </select>
         <label class="checkbox"><input type="checkbox" name="open_only"> Open only</label>
         <label class="checkbox"><input type="checkbox" id="group-by-dst"> Group by src IP → dst IP:port (hide src port)</label>
         <button type="submit">Search</button>
@@ -62,6 +69,7 @@
               <th data-sort="dst">Dst</th>
               <th data-sort="service">Service</th>
               <th data-sort="count" data-type="num">Count</th>
+              <th data-sort="scope">Scope</th>
               <th data-sort="direction">Direction</th>
               <th data-sort="application">Application</th>
               <th data-sort="state">State</th>
@@ -69,7 +77,6 @@
               <th data-sort="bytes" data-type="num">Bytes</th>
               <th data-sort="first_seen">First seen</th>
               <th data-sort="last_seen">Last seen</th>
-              <th data-sort="approved">Approved</th>
               <th></th>
             </tr>
           </thead>
@@ -87,13 +94,14 @@
               <th data-sort="risk" data-type="num">Risk</th>
               <th data-sort="protocol">Protocol</th>
               <th data-sort="port" data-type="num">Port</th>
+              <th data-sort="scope">Scope</th>
               <th data-sort="application">Application</th>
               <th data-sort="samples" data-type="num">Samples</th>
               <th data-sort="distinct_ips" data-type="num">Distinct dst IPs</th>
               <th data-sort="bytes" data-type="num">Total bytes</th>
               <th data-sort="first_seen">First seen</th>
               <th data-sort="last_seen">Last seen</th>
-              <th>Reasons</th><th></th>
+              <th>Reasons</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -101,11 +109,29 @@
       </div>
     </section>
 
-    <section id="tab-approved" class="tab-panel">
-      <p class="hint">Ports/applications you've decided to leave open. Feeds the Rule Preview tab's deny list (anything <em>not</em> here and seen enough times is a deny candidate).</p>
+    <section id="tab-uniqueports" class="tab-panel">
+      <p class="hint">The same protocol+port collapsed into one row regardless of application — e.g. TCP 443 shown once total, not once per app. UDP and TCP on the same port are always kept separate. Click a row's risk badge to see which applications make it up.</p>
+      <div class="rules-controls">
+        <label>Min samples <input id="uniqueports-min-samples" type="number" value="2" min="0"></label>
+        <span class="hint">Hides ports seen only once or twice — usually a scan or one-off probe, not a port actually in use.</span>
+      </div>
       <div class="table-wrap">
-        <table id="approved-table">
-          <thead><tr><th>Protocol</th><th>Port</th><th>Application</th><th>Label</th><th>Approved by</th><th>Approved at</th><th></th></tr></thead>
+        <table id="uniqueports-table">
+          <thead>
+            <tr>
+              <th data-sort="risk" data-type="num">Risk</th>
+              <th data-sort="protocol">Protocol</th>
+              <th data-sort="port" data-type="num">Port</th>
+              <th data-sort="service">Service</th>
+              <th data-sort="scope">Scope</th>
+              <th data-sort="apps" data-type="num">Applications</th>
+              <th data-sort="samples" data-type="num">Samples</th>
+              <th data-sort="distinct_ips" data-type="num">Distinct dst IPs</th>
+              <th data-sort="bytes" data-type="num">Total bytes</th>
+              <th data-sort="first_seen">First seen</th>
+              <th data-sort="last_seen">Last seen</th>
+            </tr>
+          </thead>
           <tbody></tbody>
         </table>
       </div>

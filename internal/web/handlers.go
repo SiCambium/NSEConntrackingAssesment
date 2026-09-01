@@ -30,6 +30,7 @@ type flowRow struct {
 	RiskBucket  string
 	RiskReasons []risk.RiskReason
 	Approved    bool
+	Scope       string
 }
 
 func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +47,7 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 		TCPState:    q.Get("tcp_state"),
 		HostName:    q.Get("host_name"),
 		OpenOnly:    q.Get("open_only") == "1",
+		Scope:       q.Get("scope"),
 		SrcPort:     atoiOrZero(q.Get("src_port")),
 		DstPort:     atoiOrZero(q.Get("dst_port")),
 		MinBytes:    int64(atoiOrZero(q.Get("min_bytes"))),
@@ -90,6 +92,7 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, flowRow{
 			FlowSession: fs, RiskScore: rr.Score, RiskBucket: string(rr.Bucket), RiskReasons: rr.Reasons,
 			Approved: approved[bucketKey(fs.Protocol, fs.DstPort, fs.Application)],
+			Scope:    store.ClassifyScope(fs.IsSrcPrivate, fs.IsDstPrivate),
 		})
 	}
 
@@ -117,6 +120,7 @@ type portRow struct {
 	RiskBucket  string
 	RiskReasons []risk.RiskReason
 	Approved    bool
+	Scope       string
 }
 
 func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +141,7 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 		rr := s.scoreBucket(u)
 		rows = append(rows, portRow{
 			PortUsage: u, RiskScore: rr.Score, RiskBucket: string(rr.Bucket), RiskReasons: rr.Reasons,
-			Approved: approved[bucketKey(u.Protocol, u.DstPort, u.Application)],
+			Approved: approved[bucketKey(u.Protocol, u.DstPort, u.Application)], Scope: u.Scope(),
 		})
 	}
 	writeJSON(w, http.StatusOK, rows)
