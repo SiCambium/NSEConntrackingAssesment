@@ -1,0 +1,13 @@
+# Runtime data defaults to the OS app-support dir, outside this repo (see
+# internal/config), but these are excluded here too as defense-in-depth in
+# case CONNTRACK_HOME or -config ever points at this folder during testing.
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+known_hosts.json
+
+/conntrackd
+/dist
+/build
+.DS_Store

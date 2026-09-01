@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ConnTrack</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>ConnTrack</h1>
+    <div class="fw-picker">
+      <label for="firewall-select">Firewall</label>
+      <select id="firewall-select"></select>
+      <span id="fw-status" class="status"></span>
+      <label for="refresh-select">Refresh</label>
+      <select id="refresh-select"></select>
+      <button id="open-in-browser" class="secondary" hidden>Open in Browser</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="flows">Flows</button>
+    <button class="tab-btn" data-tab="ports">Ports &amp; Risk</button>
+    <button class="tab-btn" data-tab="approved">Approved</button>
+    <button class="tab-btn" data-tab="rules">Rule Preview</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+    <section id="tab-flows" class="tab-panel active">
+      <form id="flow-filters" class="filters">
+        <input name="protocol" placeholder="Protocol (TCP/UDP)">
+        <input name="src" placeholder="Src IP contains">
+        <input name="dst" placeholder="Dst IP contains">
+        <input name="src_port" type="number" placeholder="Src port">
+        <input name="dst_port" type="number" placeholder="Dst port">
+        <input name="direction" placeholder="Direction">
+        <input name="application" placeholder="Application">
+        <input name="tcp_state" placeholder="TCP state">
+        <input name="host_name" placeholder="Host name contains">
+        <label class="checkbox"><input type="checkbox" name="open_only"> Open only</label>
+        <button type="submit">Search</button>
+      </form>
+      <div class="table-wrap">
+        <table id="flows-table">
+          <thead>
+            <tr>
+              <th>Risk</th><th>Protocol</th><th>Src</th><th>Dst</th><th>Direction</th>
+              <th>Application</th><th>State</th><th>Host</th><th>Bytes</th><th>First seen</th><th>Last seen</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="flows-summary" class="summary-line"></div>
+    </section>
+
+    <section id="tab-ports" class="tab-panel">
+      <div class="table-wrap">
+        <table id="ports-table">
+          <thead>
+            <tr>
+              <th>Risk</th><th>Protocol</th><th>Port</th><th>Application</th><th>Samples</th>
+              <th>Distinct dst IPs</th><th>Total bytes</th><th>First seen</th><th>Last seen</th>
+              <th>Reasons</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-approved" class="tab-panel">
+      <p class="hint">Ports/applications you've decided to leave open. Feeds the Rule Preview tab's deny list (anything <em>not</em> here and seen enough times is a deny candidate).</p>
+      <div class="table-wrap">
+        <table id="approved-table">
+          <thead><tr><th>Protocol</th><th>Port</th><th>Application</th><th>Label</th><th>Approved by</th><th>Approved at</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-rules" class="tab-panel">
+      <div class="rules-controls">
+        <label>Min sample count <input id="rules-min-samples" type="number" value="3" min="0"></label>
+        <label class="checkbox"><input id="rules-include-low" type="checkbox"> Include low risk</label>
+        <button id="rules-refresh">Generate preview</button>
+      </div>
+      <div id="rules-caveat" class="caveat"></div>
+      <div class="table-wrap">
+        <table id="rules-table">
+          <thead>
+            <tr><th>Name</th><th>Action</th><th>Protocol</th><th>Dst port</th><th>Precedence</th><th>Risk</th><th>Reason</th><th>Notes</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-settings" class="tab-panel">
+      <p class="hint">Firewalls to monitor. Adding one here starts polling it immediately — no restart needed. Removing one stops polling it but keeps its history.</p>
+      <div id="settings-unavailable" class="caveat" hidden>Settings aren't editable in this mode (no writable config was configured for this server).</div>
+      <div class="table-wrap">
+        <table id="settings-table">
+          <thead><tr><th>Status</th><th>Name</th><th>Host</th><th>Port</th><th>User</th><th>Poll interval</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h3 id="settings-form-title">Add a firewall</h3>
+      <form id="settings-form" class="settings-form">
+        <input type="hidden" name="editing_id">
+        <label>Name <input name="name" placeholder="e.g. Home" required></label>
+        <label>Host / IP <input name="host" placeholder="192.168.1.1" required></label>
+        <label>Port <input name="port" type="number" value="22" min="1" max="65535"></label>
+        <label>Username <input name="user" placeholder="admin" required></label>
+        <label>Password <input name="password" type="password" placeholder="required" autocomplete="new-password"></label>
+        <label>Poll interval <select name="poll_interval_seconds"></select></label>
+        <div class="settings-form-actions">
+          <button type="submit">Save</button>
+          <button type="button" id="settings-cancel-edit" class="secondary" hidden>Cancel edit</button>
+        </div>
+        <p id="settings-form-error" class="form-error"></p>
+      </form>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

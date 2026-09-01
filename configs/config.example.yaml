@@ -1,0 +1,33 @@
+# Copy this to your data directory as config.yaml (run `conntrackd
+# -print-data-dir` to see where that is — by default it's OUTSIDE this
+# source folder, e.g. ~/Library/Application Support/ConnTrack on macOS,
+# specifically so it doesn't end up synced by OneDrive/iCloud/etc. alongside
+# the source code). Or point -config at it explicitly.
+
+listen_addr: "127.0.0.1:8090"
+
+firewalls:
+  - id: home            # stable slug — used as the DB key; never rename once you have data
+    name: "Home"
+    host: 192.168.1.1
+    port: 22
+    user: admin
+    password: "CHANGE_ME"
+    poll_interval_seconds: 30
+
+  # - id: office
+  #   name: "Office"
+  #   host: 10.0.0.1
+  #   port: 22
+  #   user: admin
+  #   password: "CHANGE_ME"
+  #   poll_interval_seconds: 30
+
+# GreyNoise Community API: free, no signup/API key needed, but capped at
+# 10 lookups/day for unauthenticated use. conntrackd caches aggressively
+# and drips lookups out across the day to respect that — see README.md.
+greynoise:
+  enabled: true
+  daily_budget: 10
+  cache_ttl_days: 14
+  negative_cache_ttl_days: 3
